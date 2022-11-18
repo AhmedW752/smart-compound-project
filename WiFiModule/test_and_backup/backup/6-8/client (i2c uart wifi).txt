@@ -1,0 +1,258 @@
+#include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+#include <Wire.h>
+#include "Crypto.h"
+#include "PRP_CASES.h"
+//
+#define mac_size 4
+#define n       48
+
+//prototypes
+//pinMode (D8,INPUT);
+
+//AP
+const char* ssid = "TESTING";
+const char* password = "12345678";
+IPAddress AP_IP(192, 168, 1, 1);
+//STA
+IPAddress staticIP(192, 168, 1, 22);
+IPAddress gateway(192, 168, 1, 9);
+IPAddress subnet(255, 255, 255, 0);
+
+WiFiUDP Udp;
+unsigned int localUdpPort = 4210; // local port to listen on
+
+//char key___ = DH(q, num);
+
+void setup(void)
+{
+  // start I2C communication
+  Wire.begin(D1, D2); /* join i2c bus with SDA=D1 and SCL=D2 of NodeMCU */
+  // start the baud rate for the serial UART communication
+  Serial.begin(9600);
+  
+  Serial.println();
+  Serial.printf("Connecting to %s\n", ssid);
+  
+  // connnecting to the server
+  WiFi.begin(ssid, password);
+  WiFi.config(staticIP, gateway, subnet);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("Connected, IP address: ");
+  Serial.println(WiFi.localIP());
+  // start the UDP communication on a port
+  Udp.begin(localUdpPort);
+  
+  Serial.printf("Now listening at IP %s, UDP port %d\n", WiFi.localIP().toString().c_str(), localUdpPort);
+
+}
+
+
+void loop()
+{
+ // variables for the encryptions 
+  char key___ = 27;
+  char Eindex = 0;
+  char Iindex = 0;
+  String message;
+  char encrypted_message[n] = {0};
+  char key_AES[16];
+  char key_MAC[16];
+  char wifi_message[n]={'0'};
+  //variables to organize the code
+  bool ready_Encryption = false;
+  bool ready_Send = false; 
+  // recieve from I2C check 
+message = Recieve_message_I2C();
+  //recieve from UART check
+message = Recieve_message_UART();
+ //String message = Recieve_message();
+ if (message != "" || message != "error")
+   //send message to AP
+    {
+     for (int i = 0; i <= n; i++)
+    {
+      if (i < message.length())
+        wifi_message[i] = message[i];
+      else
+        wifi_message[i] = '0';
+    }
+    ready_Encryption = true; 
+    }
+  if (ready_Encryption)
+  {
+    // encryption (for loop 4 times)
+//              input 48 bytes => encrypt 12 each time => 16
+//              16 * 4 = 64 bytes 
+  for (int index = 0 ; index < n ; index += (16-mac_size) )
+  {
+    sequence_key_generator(key_AES, key_MAC, mac_size, key___);
+    char state[16] ;
+    char message_t[16];
+    for (int i = 0; i < (16-mac_size); i++)
+    {
+      state[i] = wifi_message[Iindex];
+      Iindex++;
+    }
+    // get the MAC for authintication
+    char temp_mac_message[16];
+    copyArray(state, temp_mac_message, (char)sizeof(state));
+    MAC(temp_mac_message, key_MAC, (char)sizeof(state));
+
+    //-----------------------------------------------//
+    //combine the state with the mac
+    //-----------------------------------------------//
+    combine_message(message_t, state, temp_mac_message, (char)sizeof(state) - mac_size, mac_size);
+    //----------------------------------------------//
+    //AES for the message for confidientiallyty
+    //----------------------------------------------//
+    aes_enc_dec(message_t, key_AES, 0);
+    //printMessage(message, (char)sizeof(message), "AES enc Messgae ");
+    for (char i = 0; i < 16; i++)
+    {
+      encrypted_message[Eindex] = message_t[i];
+      Eindex++;
+    }
+    
+  }
+ready_Encryption = false;
+ready_Send =true;
+    }
+if (ready_Send)
+  {Serial.println (wifi_message);
+  Serial.println("-----------------------------");
+  Serial.println (encrypted_message);
+  Serial.println("-----------------------------");
+  //send wifi by udp
+  UDP_SEND(encrypted_message, AP_IP , localUdpPort);
+  ready_Send = false;
+  }
+  /*
+  Udp.beginPacket(AP_IP, localUdpPort);
+  Udp.write(encrypted_message);
+  Udp.endPacket();
+*/
+  delay(2000);
+
+
+
+}
+//---------------------------------------------------------------------------------------------------------------------------//
+String Recieve_message_UART()
+{
+
+
+  char Rx_char=0;
+  int index=0;
+  char avr_data[48]="";
+ if ( Serial.available() > 0 )
+ {
+   while (Serial.available() > 0 && index <48 )
+    {
+    delay(50);
+    Rx_char=Serial.read();
+    avr_data[index]=Rx_char;
+      if (Rx_char == '*')
+     {
+      avr_data[index]='\0';
+      Serial.println(avr_data);
+      break;
+     }
+     index++; 
+     }
+  }
+  /*
+  String local_message = "";
+  char break_point = 0;
+  char c;
+    if (Serial.available() > 0)
+    {
+      while (1)
+      {
+        c = (char)Serial.read();
+        if (c == '*')
+        {
+          local_message += '\0';
+          return local_message;
+        }
+        else
+        {
+          local_message += c;
+          break_point++;
+          if (break_point > 100)
+        {
+          return "error";
+        }
+      }
+    }
+  }*/
+}
+String Recieve_message_I2C ()
+{
+  char c;
+    Wire.requestFrom(8, 1); /* request & read data of size 13 from slave */
+    if(Wire.available())
+    {
+      c = Wire.read();
+      //local_state = c;
+    }
+    return print_state(c);
+}
+String print_state (char state){
+switch (state)
+  {
+    //------------------------------------------------------//
+    /* owner case */
+    //------------------------------------------------------//
+    case owner_entered :
+      return "owner_entered";/*send string on request */
+      break;
+    case owner_exited  :
+      return "owner_exited ";  
+      break;
+    case owner_incprp :
+      return "owner_incprp";
+      break;
+    //-------------------------------------------------------------------//
+    /*          guest cases       */
+    //------------------------------------------------------------------//
+    case guest_entered :
+     return "guest_entered";
+      break;
+    case guest_exited  :
+      return "guest_exited "; 
+      break;
+    case guest_incprp :
+      return "guest_incprp";
+      break;
+    //-----------------------------------------------------------------------//
+    /*        guard cases       */
+     case guard_ext :
+    return "guard_exited";
+      break;
+    case guard_ent  :
+     return "guard_entered ";
+      break;
+   //----------------------------------------------------------------------------//
+     case code_erased  :
+      //Serial.println("code_erased");
+      return "code_erased";
+      break;
+    /*  default case   */ 
+    default:
+    return "";
+      break;
+  }
+}
+
+void UDP_SEND(char* mess , IPAddress IP, unsigned int Port )
+{
+  Udp.beginPacket(IP, Port);
+  Udp.write(mess);
+  Udp.endPacket();
+}

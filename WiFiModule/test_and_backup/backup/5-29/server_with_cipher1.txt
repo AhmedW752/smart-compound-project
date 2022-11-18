@@ -1,0 +1,140 @@
+#include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+#include "Crypto.h"
+IPAddress local_IP(192, 168, 1, 1);
+IPAddress gateway(192, 168, 0, 80);
+IPAddress subnet(255, 255, 255, 0);
+
+/*
+  given the cipher nymber num in te crypto.h (a => num = 7)
+  key_shared = Ya => a^(Xa)
+  hey_cipher = Xa
+*/
+char key_cipher = DH(q, num); //Xa
+char key_shared = pow(num, key_cipher); //Ya
+
+
+
+char REC_key_AES[16] ;
+char REC_key_MAC[16] ;
+// server name and password
+const char* ssid = "TESTING";
+const char* password = "12345678";
+// encryption standered data
+#define mac_size 3
+const int n = 48;
+//char input[n] = "the amazing shady";
+//char Eindex = 0;
+char Oindex = 0;
+char Iindex = 0;
+//char encrypted_message[n] = {0};
+char output[n] = {0};
+WiFiUDP Udp;
+
+unsigned int localUdpPort = 4210; // local port to listen on
+char incomingPacket[255]; // buffer for incoming packets
+//char replyPacekt[] = "Message received"; // a reply string to send back
+
+void setup()
+{
+  Serial.begin(9600);
+  Serial.println();
+  Serial.println(WiFi.softAPConfig(local_IP, gateway, subnet) ? "AP Configured" : "Configuration Failed!");
+  Serial.print("Setting Soft-AP ... ");
+  Serial.println(WiFi.softAP(ssid, password) ? "AP Ready" : "Failed!");
+  Serial.print("Soft-AP IP address: ");
+  Serial.println(WiFi.softAPIP());
+
+  Udp.begin(localUdpPort);
+  Serial.printf("Now listening at IP %s, UDP port %d\n", WiFi.localIP().toString().c_str(), localUdpPort);
+
+}
+
+
+void loop()
+{
+
+  //recieving the shared key.
+  int packetSize = Udp.parsePacket();
+  if (packetSize)
+  {
+    // receive incoming UDP packets
+    //Serial.printf("Received %d bytes from %s, port %d\n", packetSize, Udp.remoteIP().toString().c_str(), Udp.remotePort());
+    int len = Udp.read(incomingPacket, 255);
+    if (len > 0)
+    {
+      incomingPacket[len] = 0;
+    }
+    Serial.printf("UDP packet contents: %s\n", incomingPacket);
+    //char Yb = (char) * incomingPacket;
+    
+    //char key_seq = pow(Yb, key_cipher);
+    
+    char key_seq = pow((char) * incomingPacket, key_cipher);
+    
+    //receving the message
+    //char key_seq= 25;
+    packetSize = Udp.parsePacket();
+    if (packetSize)
+    {
+      // receive incoming UDP packets
+      //Serial.printf("Received %d bytes from %s, port %d\n", packetSize, Udp.remoteIP().toString().c_str(), Udp.remotePort());
+      int len = Udp.read(incomingPacket, 255);
+      if (len > 0)
+      {
+        incomingPacket[len] = 0;
+      }
+      Serial.printf("UDP packet contents: %s\n", incomingPacket);
+      // loop for 3 times : n = 48 
+      //                    decryption work for 16 bytes per one loop
+      for (int index = 0 ; index < n ; index += 16 )
+      {
+        sequence_key_generator(REC_key_AES, REC_key_MAC, mac_size, key_seq);
+        //char state[16] = { 0 };
+        char message_t[16];
+        for (int i = 0; i < 16; i++)
+        {
+          message_t[i] = incomingPacket[Iindex];
+          Iindex++;
+        }
+
+        aes_enc_dec(message_t, REC_key_AES, 1);
+        //decryption testing
+        char data[16];
+        char temp_data[16];
+        char mac[mac_size];
+        // separate the mac from the message
+        separete_mac(message_t, data, mac, (char)sizeof(message_t), mac_size);
+        //printMessage(data, 16, "display recieved data");
+        //printMessage(mac, mac_size, "display mac to check");
+
+        //generate the mac from the message again
+        copyArray(data, temp_data, (char)sizeof(data));
+
+        // compare the mac
+        if (macCompare(temp_data, mac, REC_key_MAC, (char)sizeof(data), mac_size))
+        {
+          //printf("message recieved successfully");
+        }
+        for (char i = 0; i < 12; i++)
+        {
+          output[Oindex] = data[i];
+          Oindex++;
+        }
+
+
+      }
+
+
+      // send back a reply, to the IP address and port we got the packet from
+
+      /*
+
+         Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
+        Udp.write(replyPacekt);
+        Udp.endPacket();
+
+      */
+    }
+  }
+}
